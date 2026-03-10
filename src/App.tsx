@@ -210,11 +210,69 @@ function evaluateBoard(board: Board): number {
       if (!p) continue
       let value = PIECE_VALUE[p.type]
       if (p.type === 'soldier' && crossedRiver(p.side, r)) value += 30
-      if (p.type === 'general' && isInCheck(board, p.side)) value -= 50
+      if (p.type === 'horse' || p.type === 'rook' || p.type === 'cannon') {
+        value += 8 - Math.abs(c - 4) * 1.2
+      }
       score += p.side === 'red' ? value : -value
     }
   }
+
+  if (isInCheck(board, 'red')) score -= 120
+  if (isInCheck(board, 'black')) score += 120
   return score
+}
+
+function moveHeuristic(board: Board, move: Move, side: Side): number {
+  let score = 0
+  const moving = board[move.from.row][move.from.col]
+  const target = board[move.to.row][move.to.col]
+
+  if (target) score += PIECE_VALUE[target.type] * 2 - (moving ? PIECE_VALUE[moving.type] * 0.3 : 0)
+
+  const next = applyMove(board, move)
+  const enemy: Side = side === 'red' ? 'black' : 'red'
+  if (isInCheck(next, enemy)) score += 180
+
+  const centerBias = 4 - Math.abs(move.to.col - 4)
+  score += centerBias * 8
+
+  return score
+}
+
+function minimax(board: Board, depth: number, side: Side, alpha: number, beta: number): number {
+  const moves = allLegalMoves(board, side)
+  if (depth === 0 || moves.length === 0) {
+    if (!moves.length) {
+      if (isInCheck(board, side)) return side === 'black' ? 999999 : -999999
+      return 0
+    }
+    return evaluateBoard(board)
+  }
+
+  const ordered = moves
+    .map((m) => ({ m, h: moveHeuristic(board, m, side) }))
+    .sort((a, b) => side === 'black' ? b.h - a.h : a.h - b.h)
+    .map((x) => x.m)
+
+  if (side === 'black') {
+    let best = -Infinity
+    for (const move of ordered) {
+      const score = minimax(applyMove(board, move), depth - 1, 'red', alpha, beta)
+      best = Math.max(best, score)
+      alpha = Math.max(alpha, best)
+      if (beta <= alpha) break
+    }
+    return best
+  }
+
+  let best = Infinity
+  for (const move of ordered) {
+    const score = minimax(applyMove(board, move), depth - 1, 'black', alpha, beta)
+    best = Math.min(best, score)
+    beta = Math.min(beta, best)
+    if (beta <= alpha) break
+  }
+  return best
 }
 
 function pickAiMove(board: Board, difficulty: Difficulty): Move | null {
@@ -222,30 +280,24 @@ function pickAiMove(board: Board, difficulty: Difficulty): Move | null {
   if (!moves.length) return null
   if (difficulty === 'easy') return moves[Math.floor(Math.random() * moves.length)]
 
-  const scored = moves.map((move) => {
-    const next = applyMove(board, move)
-    let score = evaluateBoard(next)
-    const target = board[move.to.row][move.to.col]
-    if (target) score -= PIECE_VALUE[target.type] * 0.6
-    return { move, score }
-  })
+  const depth = difficulty === 'medium' ? 2 : 3
+  let bestMove = moves[0]
+  let bestScore = -Infinity
 
-  scored.sort((a, b) => a.score - b.score)
-  if (difficulty === 'medium') return scored[0].move
+  const ordered = moves
+    .map((m) => ({ m, h: moveHeuristic(board, m, 'black') }))
+    .sort((a, b) => b.h - a.h)
+    .map((x) => x.m)
 
-  const top = scored.slice(0, Math.min(6, scored.length))
-  let best = top[0]
-  for (const candidate of top) {
-    const responseMoves = allLegalMoves(applyMove(board, candidate.move), 'red')
-    let worstReply = -Infinity
-    for (const reply of responseMoves.slice(0, 12)) {
-      const afterReply = applyMove(applyMove(board, candidate.move), reply)
-      worstReply = Math.max(worstReply, evaluateBoard(afterReply))
+  for (const move of ordered.slice(0, difficulty === 'medium' ? 18 : 24)) {
+    const score = minimax(applyMove(board, move), depth - 1, 'red', -Infinity, Infinity)
+    if (score > bestScore) {
+      bestScore = score
+      bestMove = move
     }
-    const minimaxScore = responseMoves.length ? worstReply : evaluateBoard(applyMove(board, candidate.move))
-    if (minimaxScore < best.score) best = { move: candidate.move, score: minimaxScore }
   }
-  return best.move
+
+  return bestMove
 }
 
 function statusText(board: Board, turn: Side) {
@@ -332,8 +384,55 @@ function App() {
         <section className="board-panel">
           <div className="board-status">{statusText(board, turn)}</div>
           <div className="board-wrap">
-            <div className="river">楚 河　　　汉 界</div>
-            <div className="board-grid">
+            <div className="board-surface">
+              <svg className="board-svg" viewBox="0 0 8 9" preserveAspectRatio="none" aria-hidden>
+                <rect x="0" y="0" width="8" height="9" fill="none" stroke="rgba(72,38,13,0.98)" strokeWidth="0.13" />
+                <rect x="0.18" y="0.18" width="7.64" height="8.64" fill="none" stroke="rgba(72,38,13,0.82)" strokeWidth="0.05" />
+                <line x1="0" y1="0" x2="0" y2="9" stroke="rgba(72,38,13,1)" strokeWidth="0.24" />
+                <line x1="8" y1="0" x2="8" y2="9" stroke="rgba(72,38,13,1)" strokeWidth="0.24" />
+
+                {[1,2,3,4,5,6,7].map((x) => (
+                  <g key={`v-${x}`}>
+                    <line x1={x} y1="0" x2={x} y2="4" stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+                    <line x1={x} y1="5" x2={x} y2="9" stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+                  </g>
+                ))}
+                {[0,1,2,3,4,5,6,7,8,9].map((y) => (
+                  <line key={`h-${y}`} x1="0" y1={y} x2="8" y2={y} stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+                ))}
+
+                <line x1="3" y1="0" x2="5" y2="2" stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+                <line x1="5" y1="0" x2="3" y2="2" stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+                <line x1="3" y1="7" x2="5" y2="9" stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+                <line x1="5" y1="7" x2="3" y2="9" stroke="rgba(72,38,13,0.88)" strokeWidth="0.04" />
+
+                {[
+                  { x: 1, y: 2 }, { x: 7, y: 2 }, { x: 1, y: 7 }, { x: 7, y: 7 },
+                  { x: 0, y: 3 }, { x: 2, y: 3 }, { x: 4, y: 3 }, { x: 6, y: 3 }, { x: 8, y: 3 },
+                  { x: 0, y: 6 }, { x: 2, y: 6 }, { x: 4, y: 6 }, { x: 6, y: 6 }, { x: 8, y: 6 },
+                ].map(({ x, y }, idx) => {
+                  const d = 0.13
+                  const l = 0.18
+                  const left = x > 0
+                  const right = x < 8
+                  return (
+                    <g key={`mark-${idx}`} stroke="rgba(72,38,13,0.88)" strokeWidth="0.035">
+                      {left && <line x1={x - d - l} y1={y - d} x2={x - d} y2={y - d} />}
+                      {left && <line x1={x - d} y1={y - d - l} x2={x - d} y2={y - d} />}
+                      {left && <line x1={x - d - l} y1={y + d} x2={x - d} y2={y + d} />}
+                      {left && <line x1={x - d} y1={y + d} x2={x - d} y2={y + d + l} />}
+
+                      {right && <line x1={x + d} y1={y - d} x2={x + d + l} y2={y - d} />}
+                      {right && <line x1={x + d} y1={y - d - l} x2={x + d} y2={y - d} />}
+                      {right && <line x1={x + d} y1={y + d} x2={x + d + l} y2={y + d} />}
+                      {right && <line x1={x + d} y1={y + d} x2={x + d} y2={y + d + l} />}
+                    </g>
+                  )
+                })}
+              </svg>
+
+              <div className="river"><span>楚河</span><span>汉界</span></div>
+
               {board.map((row, r) =>
                 row.map((piece, c) => {
                   const isSelected = selected?.row === r && selected?.col === c
@@ -342,7 +441,8 @@ function App() {
                   return (
                     <button
                       key={`${r}-${c}`}
-                      className={`cell ${isSelected ? 'selected' : ''} ${isTarget ? 'target' : ''} ${isLast ? 'last' : ''}`}
+                      className={`point ${isSelected ? 'selected' : ''} ${isTarget ? 'target' : ''} ${isLast ? 'last' : ''}`}
+                      style={{ left: `${(c / 8) * 100}%`, top: `${(r / 9) * 100}%` }}
                       onClick={() => onCellClick(r, c)}
                     >
                       {piece && <span className={`piece ${piece.side}`}>{PIECE_LABEL[piece.side][piece.type]}</span>}
